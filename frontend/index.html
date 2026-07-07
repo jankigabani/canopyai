@@ -8,13 +8,12 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/styles.css?v=9" />
+  <link rel="stylesheet" href="/static/styles.css?v=11" />
 </head>
 <body>
   <!-- Top navigation -->
   <header id="topnav">
     <div class="brand">
-      <div class="logo-mark">C</div>
       <span class="wordmark">CanopyAI</span>
     </div>
     <nav>
@@ -44,6 +43,18 @@
       <button class="rail-btn active" id="railDist" title="Vegetation disturbance">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
         <span>Disturb</span>
+      </button>
+      <button class="rail-btn active" id="railGoes" title="Minutes-level GOES hotspots">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+        <span>Flash</span>
+      </button>
+      <button class="rail-btn active" id="railBolt" title="Live lightning">
+        <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
+        <span>Bolts</span>
+      </button>
+      <button class="rail-btn" id="railPark" title="Protected areas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M12 3 4 6.5v5c0 4.6 3.2 7.7 8 9.5 4.8-1.8 8-4.9 8-9.5v-5L12 3z"/></svg>
+        <span>Parks</span>
       </button>
       <button class="rail-btn" id="railRisk" title="Fire risk forecast">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
@@ -90,12 +101,51 @@
 
         <div class="layer-card">
           <div class="layer-top">
+            <span class="dot amber"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Flash fires <span class="tag flash">minutes</span></div>
+              <div class="layer-sub">GOES satellite · rescans every 10 min · last 90 min</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrGoes" checked /><span class="track"></span></label>
+          </div>
+        </div>
+
+        <div class="layer-card">
+          <div class="layer-top">
             <span class="dot red"></span>
             <div class="layer-titles">
               <div class="layer-title">Active fires <span class="tag live">live</span></div>
               <div class="layer-sub">NASA FIRMS · about 3 h behind · last 3 days</div>
             </div>
             <label class="switch"><input type="checkbox" id="lyrFire" checked /><span class="track"></span></label>
+          </div>
+        </div>
+
+        <div class="layer-card">
+          <div class="layer-top">
+            <span class="dot yellow"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Lightning <span class="tag live">live</span></div>
+              <div class="layer-sub">Blitzortung network · strikes, last hour</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrBolt" checked /><span class="track"></span></label>
+          </div>
+          <div class="layer-body">
+            <p class="layer-note">Strikes into hot dry ground become ignition watch cells, before any fire shows up.</p>
+          </div>
+        </div>
+
+        <div class="layer-card">
+          <div class="layer-top">
+            <span class="dot green"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Protected areas</div>
+              <div class="layer-sub">WDPA · parks and reserves, worldwide</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrPark" /><span class="track"></span></label>
+          </div>
+          <div class="layer-body">
+            <p class="layer-note">New fire clusters inside these escalate the alert automatically.</p>
           </div>
         </div>
 
@@ -143,6 +193,10 @@
 
       <div id="ptab-analysis" class="ptab-body" hidden>
         <div class="analysis-box" id="mapAnalysis">Loading live analysis…</div>
+        <div class="smoke-box">
+          <span class="micro-label">Smoke · Ontario cities · live PM2.5</span>
+          <div id="smokeBox" class="smoke-list">Loading…</div>
+        </div>
       </div>
 
       <div class="basemap-bar">
@@ -178,10 +232,20 @@
 
     <div id="mapLegend" class="legend-chips">
       <span class="chip"><span class="sw" style="background:#dc6699"></span>Tree cover loss</span>
+      <span class="chip"><span class="sw" style="background:#f59e0b"></span>Flash fires</span>
       <span class="chip"><span class="sw" style="background:#dc2626"></span>Active fires</span>
       <span class="chip"><span class="sw" style="background:#7b2cbf"></span>Disturbance</span>
     </div>
     <div id="mapStatus" class="map-status">Loading…</div>
+
+    <!-- Live event feed (WebSocket) -->
+    <div id="liveFeed" class="live-feed">
+      <div class="live-feed-head">
+        <span class="pulse"></span> Live feed
+        <span id="liveFeedState" class="live-feed-state">connecting…</span>
+      </div>
+      <div id="liveFeedItems"></div>
+    </div>
   </section>
 
   <!-- ============ DASHBOARD VIEW ============ -->
@@ -280,6 +344,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

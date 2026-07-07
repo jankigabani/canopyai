@@ -149,6 +149,13 @@ def build_message(r):
             f"The biggest sits near ({c['lat']}, {c['lon']}) with {c['size']} "
             f"detections pushing {c['total_frp']} MW."
         )
+    protected = [c for c in r["new_clusters"] if c.get("protected")]
+    if protected:
+        p = protected[0]["protected"]
+        lines.append(
+            f"One of them sits inside {p['name']}. That is a protected area. "
+            "This one matters."
+        )
     if r["is_anomaly"]:
         lines.append(
             f"Today is unusual. The fire count is {r['zscore']} standard "

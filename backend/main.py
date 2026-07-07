@@ -11,29 +11,44 @@ FastAPI app that powers the Ontario-focused dashboard:
 
 No database — data is fetched live from FIRMS and alert config lives in memory.
 """
+import asyncio
 import logging
 import math
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, alerts, config, firms, gfw_api, impact, regions, risk, scheduler, weather
+from . import (
+    ai, air, alerts, config, firms, gfw_api, impact, lightning, live,
+    protected, regions, risk, scheduler, weather,
+)
 
 logging.basicConfig(level=logging.INFO)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
-app = FastAPI(title="Forest Watch API", version="0.2.0")
+app = FastAPI(title="Forest Watch API", version="0.3.0")
+
+_lightning_task = None
 
 
 @app.on_event("startup")
 async def _startup():
+    global _lightning_task
     scheduler.start_scheduler()
+    _lightning_task = asyncio.create_task(lightning.run_client())
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    if _lightning_task:
+        _lightning_task.cancel()
 
 
 # --- Health -----------------------------------------------------------------
@@ -56,6 +71,74 @@ async def fires(
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return {"count": len(data), "region": region, "days": days, "fires": data}
+
+
+# --- Minutes-level detection (GOES) + live feed -------------------------------
+def _fire_age_min(f):
+    """Age in minutes from acq_date + acq_time (HHMM, UTC). None if unparsable."""
+    try:
+        t = int(f["acq_time"])
+        dt = datetime.strptime(f["acq_date"], "%Y-%m-%d").replace(
+            hour=t // 100, minute=t % 100, tzinfo=timezone.utc
+        )
+        return max(0, int((datetime.now(timezone.utc) - dt).total_seconds() // 60))
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+@app.get("/api/fires/latest")
+async def fires_latest(minutes: int = Query(90, ge=10, le=1440)):
+    """
+    The freshest detections we have: GOES geostationary hotspots from the last
+    N minutes. GOES rescans every ~10 minutes, so this is minutes-level, not
+    the ~3 hour polar-orbit lag.
+    """
+    if not scheduler.GOES_LATEST["fetched_at"]:
+        try:
+            await scheduler.goes_poll()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+    out = []
+    for f in scheduler.GOES_LATEST["fires"]:
+        age = _fire_age_min(f)
+        if age is not None and age <= minutes:
+            out.append({**f, "age_min": age})
+    out.sort(key=lambda f: f["age_min"])
+    return {
+        "count": len(out),
+        "window_min": minutes,
+        "fetched_at": scheduler.GOES_LATEST["fetched_at"],
+        "fires": out,
+    }
+
+
+@app.websocket("/ws/live")
+async def ws_live(ws: WebSocket):
+    """Live event feed: GOES hotspots, lightning, ignition watches, alerts."""
+    await live.manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()  # client pings; content ignored
+    except WebSocketDisconnect:
+        live.manager.drop(ws)
+
+
+@app.get("/api/lightning")
+async def lightning_now(minutes: int = Query(60, ge=5, le=180)):
+    """Recent strikes over Canada + the current ignition-watch cells."""
+    return {
+        "available": lightning.STATE["connected"],
+        "state": lightning.STATE,
+        "strikes": lightning.recent_strikes(minutes)[:3000],
+        "ignition": lightning.LAST_IGNITION["zones"],
+        "checked_at": lightning.LAST_IGNITION["checked_at"],
+    }
+
+
+@app.get("/api/air")
+async def air_quality():
+    """Smoke picture for Ontario cities, worst first."""
+    return {"cities": await air.city_smoke()}
 
 
 # --- Dashboard stats --------------------------------------------------------
@@ -159,13 +242,26 @@ async def _live_context():
     fires = await _ontario_fires(5)
     today, _ = firms.split_today_yesterday(fires)
     zones = await risk.risk_forecast(fires)
+    smoke = await air.city_smoke()
+    goes_recent = [
+        f for f in scheduler.GOES_LATEST["fires"]
+        if (_fire_age_min(f) or 9999) <= 60
+    ]
     ctx = {
         "analysis": {k: result[k] for k in (
             "today_count", "yesterday_count", "net_change", "pct_change",
             "new_cluster_count", "severity", "is_anomaly", "zscore")},
         "new_clusters": result["new_clusters"][:5],
+        "protected_hits": result.get("protected_hits", []),
         "top_risk": zones[:5],
         "impact": impact.estimate(today),
+        "goes_hotspots_last_hour": len(goes_recent),
+        "smoke_worst_cities": smoke[:3],
+        "lightning": {
+            "feed_connected": lightning.STATE["connected"],
+            "strikes_last_hour_canada": len(lightning.recent_strikes(60)),
+            "ignition_watch_cells": lightning.LAST_IGNITION["zones"][:3],
+        },
     }
     _ctx_cache.update(at=now, ctx=ctx)
     return ctx
@@ -221,8 +317,13 @@ async def inspect_point(lat: float = Query(...), lon: float = Query(...)):
         for d, f in ranked[:3]
     ]
 
-    wx = await weather.fire_weather_risk([(lat, lon)])
+    wx, smoke_list, prot = await asyncio.gather(
+        weather.fire_weather_risk([(lat, lon)]),
+        air.smoke_at([(lat, lon)]),
+        protected.lookup(lat, lon),
+    )
     w = wx[0] if wx else None
+    smoke = smoke_list[0] if smoke_list else None
 
     if within_25:
         headline = f"This spot is hot. {within_25} fires within 25 km."
@@ -230,10 +331,17 @@ async def inspect_point(lat: float = Query(...), lon: float = Query(...)):
         headline = f"Nothing on top of this spot, but {within_100} fires within 100 km. Worth watching."
     else:
         headline = "Quiet right now. No fires within 100 km."
+    if prot:
+        headline += f" You are inside {prot['name']}."
     if w:
         headline += (
             f" Tomorrow looks {w['label'].lower()} risk here. "
             f"{w['temp_c']} C, wind {w['wind_kmh']} km/h, humidity {w['humidity_pct']} percent."
+        )
+    if smoke and smoke.get("pm25_now") is not None:
+        headline += (
+            f" Air quality is {smoke['label'].lower()}, "
+            f"PM2.5 at {smoke['pm25_now']}."
         )
 
     return {
@@ -243,6 +351,8 @@ async def inspect_point(lat: float = Query(...), lon: float = Query(...)):
         "fires_within_100km": within_100,
         "nearest": nearest,
         "weather": w,
+        "smoke": smoke,
+        "protected": prot,
         "headline": headline,
     }
 
@@ -284,6 +394,31 @@ async def tile_dist(z: int, x: int, y: int):
     """OPERA/UMD DIST-ALERT tiles — near-real-time vegetation disturbance,
     GLOBAL (including boreal Canada), every 2-4 days from HLS imagery."""
     url = f"{config.GFW_TILES}/umd_glad_dist_alerts/latest/default/{z}/{x}/{y}.png"
+    return await _proxy_tile(url)
+
+
+def _tile_bbox_3857(z, x, y):
+    """Web-mercator (EPSG:3857) bbox in meters for a slippy tile."""
+    n = 2 ** z
+    lon_w = x / n * 360.0 - 180.0
+    lon_e = (x + 1) / n * 360.0 - 180.0
+    lat_n = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+    lat_s = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
+    r = 6378137.0
+    mx = lambda lo: r * math.radians(lo)
+    my = lambda la: r * math.log(math.tan(math.pi / 4 + math.radians(la) / 2))
+    return mx(lon_w), my(lat_s), mx(lon_e), my(lat_n)
+
+
+@app.get("/api/tile/protected/{z}/{x}/{y}.png")
+async def tile_protected(z: int, x: int, y: int):
+    """Protected-area polygons (WDPA), rendered by UNEP-WCMC's map server."""
+    xmin, ymin, xmax, ymax = _tile_bbox_3857(z, x, y)
+    url = (
+        f"{protected.WDPA_EXPORT}?bbox={xmin},{ymin},{xmax},{ymax}"
+        "&bboxSR=3857&imageSR=3857&size=256,256&format=png32"
+        "&transparent=true&layers=show:1&f=image"
+    )
     return await _proxy_tile(url)
 
 

@@ -112,12 +112,17 @@ let bSat = null;
 // Ontario boundary box, subtle
 L.rectangle([[41.6, -95.2], [56.9, -74.3]], { color: "#16a34a", weight: 1.2, fill: false, dashArray: "6,6", opacity: .6 }).addTo(bigmap);
 
-// Live layers on by default: loss + fires + disturbance
+// Live layers on by default: loss + fires + disturbance + GOES flash + lightning
 const lossLayer = decodeGridLayer({ pane: "loss", opacity: 0.9, urlFn: lossUrl, decode: decodeLoss }).addTo(bigmap);
 const distLayer = decodeGridLayer({ pane: "dist", opacity: 0.85, urlFn: distUrl, decode: decodeDist }).addTo(bigmap);
 const gladLayer = decodeGridLayer({ pane: "glad", opacity: 0.8, urlFn: gladUrl, decode: decodeGlad });
 const fireLayer = L.layerGroup().addTo(bigmap);
 const riskLayer = L.layerGroup();
+const goesLayer = L.layerGroup().addTo(bigmap);
+const boltLayer = L.layerGroup().addTo(bigmap);
+const ignitionLayer = L.layerGroup().addTo(bigmap);
+bigmap.createPane("park"); bigmap.getPane("park").style.zIndex = 340;
+const parkLayer = L.tileLayer("/api/tile/protected/{z}/{x}/{y}.png", { pane: "park", opacity: 0.55, maxZoom: 19 });
 
 function setStatus(m, err) { $("mapStatus").textContent = m; $("mapStatus").style.color = err ? "#dc2626" : ""; }
 
@@ -143,6 +148,108 @@ async function loadBigRisk() {
   } catch (e) { /* non-fatal */ }
 }
 
+// ---- Minutes-level GOES flash fires -----------------------------------------
+function goesMarker(lat, lon, popupHtml, fresh = true) {
+  // Only fresh detections get the animated ping. Hundreds of infinite
+  // animations melt the compositor, and a static amber dot reads fine.
+  const m = L.marker([lat, lon], {
+    icon: L.divIcon({ className: "", html: `<div class="${fresh ? "goes-pulse" : "goes-dot"}"></div>`, iconSize: [14, 14], iconAnchor: [7, 7] }),
+  });
+  if (popupHtml) m.bindPopup(popupHtml);
+  return m;
+}
+async function loadGoesFires() {
+  try {
+    const d = await api("/api/fires/latest?minutes=90");
+    goesLayer.clearLayers();
+    d.fires.forEach((f) => goesMarker(f.lat, f.lon,
+      `<div class="pop"><div class="pop-head">Flash fire · GOES</div><div class="pop-line">Detected ${f.age_min} min ago${f.province ? " · " + f.province : ""}<br>Power ${f.frp ? Math.round(f.frp) + " MW" : "n/a"}</div></div>`,
+      f.age_min <= 30
+    ).addTo(goesLayer));
+    $("mapStatus").dataset.goes = d.count;
+  } catch (e) { /* non-fatal */ }
+}
+
+// ---- Lightning + ignition watch ----------------------------------------------
+function boltMarker(lat, lon, ageMin) {
+  const op = Math.max(0.25, 1 - (ageMin ?? 0) / 60);
+  return L.marker([lat, lon], {
+    opacity: op,
+    icon: L.divIcon({ className: "", html: '<div class="bolt-dot"></div>', iconSize: [8, 8], iconAnchor: [4, 4] }),
+  });
+}
+async function loadLightning() {
+  try {
+    const d = await api("/api/lightning?minutes=60");
+    boltLayer.clearLayers();
+    ignitionLayer.clearLayers();
+    d.strikes.slice(0, 800).forEach((s) => boltMarker(s.lat, s.lon, s.age_min).addTo(boltLayer));
+    (d.ignition || []).filter((z) => z.ignition_risk >= 40).forEach((z) => {
+      L.circle([z.lat, z.lon], { radius: 28000, color: "#f59e0b", weight: 2, dashArray: "6,4", fillColor: "#f59e0b", fillOpacity: 0.12 })
+        .bindPopup(`<div class="pop"><div class="pop-head">Ignition watch ${z.ignition_risk}/100</div><div class="pop-line">${z.strikes} strikes in the last hour.<br>Fire weather ${z.weather_label ?? "?"} (${z.weather_risk ?? "?"}/100). No fire yet. Watching.</div></div>`)
+        .addTo(ignitionLayer);
+    });
+    $("lyrBolt").parentElement.title = d.available ? "Feed connected" : "Feed connecting…";
+  } catch (e) { /* non-fatal */ }
+}
+
+// ---- Live WebSocket feed -------------------------------------------------------
+let feedCount = 0;
+function addFeedItem(ev, seed) {
+  const box = $("liveFeedItems");
+  const div = document.createElement("div");
+  div.className = "feed-item" + (seed ? " seed" : "");
+  const when = ev.at ? ev.at.slice(11, 16) + " UTC" : "";
+  div.innerHTML = `<span class="fi-dot ${ev.type}"></span><span class="fi-text"></span><span class="fi-time">${when}</span>`;
+  div.querySelector(".fi-text").textContent = ev.text;
+  if (ev.lat != null && ev.lon != null) {
+    div.classList.add("clickable");
+    div.addEventListener("click", () => bigmap.flyTo([ev.lat, ev.lon], 8));
+  }
+  box.prepend(div);
+  while (box.children.length > 8) box.removeChild(box.lastChild);
+  if (!seed) feedCount++;
+}
+function handleLiveEvent(ev) {
+  if (ev.type === "hello") { (ev.events || []).slice().reverse().forEach((e) => addFeedItem(e, true)); return; }
+  addFeedItem(ev);
+  if (ev.type === "fire" && ev.lat != null) {
+    goesMarker(ev.lat, ev.lon,
+      `<div class="pop"><div class="pop-head">Flash fire · GOES</div><div class="pop-line">Just detected${ev.province ? " · " + ev.province : ""}<br>${ev.frp ? Math.round(ev.frp) + " MW" : ""}</div></div>`
+    ).addTo(goesLayer);
+  }
+  if (ev.type === "lightning" && ev.lat != null && bigmap.hasLayer(boltLayer)) {
+    const m = boltMarker(ev.lat, ev.lon, 0).addTo(boltLayer);
+    setTimeout(() => boltLayer.removeLayer(m), 10 * 60 * 1000);
+  }
+  if (ev.type === "ignition" && ev.lat != null) loadLightning();
+}
+let wsRetry = 1000;
+function connectLive() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/live`);
+  ws.onopen = () => { wsRetry = 1000; $("liveFeedState").textContent = "connected"; };
+  ws.onmessage = (m) => { try { handleLiveEvent(JSON.parse(m.data)); } catch (e) { /* ignore */ } };
+  ws.onclose = () => {
+    $("liveFeedState").textContent = "reconnecting…";
+    setTimeout(connectLive, wsRetry);
+    wsRetry = Math.min(wsRetry * 2, 30000);
+  };
+}
+
+// ---- Smoke (Insights tab) ------------------------------------------------------
+async function loadSmoke() {
+  try {
+    const { cities } = await api("/api/air");
+    $("smokeBox").innerHTML = cities.map((c) => `
+      <div class="smoke-row">
+        <span class="smoke-city">${c.city}</span>
+        <span class="smoke-badge ${(c.label || "").split(" ")[0].toLowerCase()}">${c.label ?? "?"}</span>
+        <span class="smoke-val">${c.pm25_now ?? "?"} µg/m³</span>
+      </div>`).join("") || "No data.";
+  } catch (e) { $("smokeBox").textContent = e.message; }
+}
+
 // ---- Layer wiring: switches + rail stay in sync ------------------------------
 const LAYERS = {
   lyrLoss: { layer: lossLayer, rail: "railLoss" },
@@ -150,13 +257,16 @@ const LAYERS = {
   lyrDist: { layer: distLayer, rail: "railDist" },
   lyrRisk: { layer: riskLayer, rail: "railRisk", onEnable: loadBigRisk },
   lyrGlad: { layer: gladLayer, rail: null },
+  lyrGoes: { layer: goesLayer, rail: "railGoes", onEnable: loadGoesFires },
+  lyrBolt: { layer: boltLayer, rail: "railBolt", onEnable: loadLightning, twin: ignitionLayer },
+  lyrPark: { layer: parkLayer, rail: "railPark" },
 };
 function applyLayer(chkId, on) {
   const cfg = LAYERS[chkId];
   $(chkId).checked = on;
   if (cfg.rail) $(cfg.rail).classList.toggle("active", on);
-  if (on) { cfg.layer.addTo(bigmap); if (cfg.onEnable) cfg.onEnable(); }
-  else bigmap.removeLayer(cfg.layer);
+  if (on) { cfg.layer.addTo(bigmap); if (cfg.twin) cfg.twin.addTo(bigmap); if (cfg.onEnable) cfg.onEnable(); }
+  else { bigmap.removeLayer(cfg.layer); if (cfg.twin) bigmap.removeLayer(cfg.twin); }
 }
 Object.keys(LAYERS).forEach((chkId) => {
   $(chkId).addEventListener("change", (e) => applyLayer(chkId, e.target.checked));
@@ -188,7 +298,7 @@ $("locCa").addEventListener("click", () => bigmap.flyTo(VIEWS.canada.center, VIE
 document.querySelectorAll(".ptab").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll(".ptab").forEach((x) => x.classList.remove("active")); b.classList.add("active");
   $("ptab-legend").hidden = b.dataset.ptab !== "legend"; $("ptab-analysis").hidden = b.dataset.ptab !== "analysis";
-  if (b.dataset.ptab === "analysis") loadMapAnalysis();
+  if (b.dataset.ptab === "analysis") { loadMapAnalysis(); loadSmoke(); }
 }));
 async function loadMapAnalysis() {
   $("mapAnalysis").textContent = "Running live check…";
@@ -228,6 +338,7 @@ bigmap.on("click", async (e) => {
           <div><b>${d.fires_within_100km}</b><span>fires &lt; 100 km</span></div>
           <div><b>${w ? w.risk : "?"}</b><span>risk tomorrow</span></div>
         </div>
+        ${d.protected ? `<div class="pop-line" style="margin-top:4px"><span class="pop-dot"></span>${d.protected.name} · ${d.protected.designation ?? "protected area"}</div>` : ""}
         <div class="pop-line">${d.headline}</div>
         ${d.nearest.length ? `<div class="pop-line" style="margin-top:6px">Nearest fire ${d.nearest[0].km} km away, ${d.nearest[0].frp ?? "?"} MW, ${d.nearest[0].date}</div>` : ""}
       </div>`);
@@ -458,9 +569,14 @@ document.body.addEventListener("click", (e) => {
 // ====================== Boot ================================================
 (async function () {
   loadBigFires();
+  loadGoesFires();
+  loadLightning();
+  connectLive();
   await loadCatalog();
   await loadRegion("ON");
   loadAlertFeed();
   loadLog();
   setInterval(loadBigFires, 5 * 60 * 1000);
+  setInterval(() => { if (bigmap.hasLayer(goesLayer)) loadGoesFires(); }, 2 * 60 * 1000);
+  setInterval(() => { if (bigmap.hasLayer(boltLayer)) loadLightning(); }, 2 * 60 * 1000);
 })();

@@ -126,27 +126,34 @@ def detect_change(today_fires, yesterday_fires, history_counts, settings):
 
 
 def build_message(r):
-    """Human-readable alert text (Telegram supports basic HTML)."""
-    emoji = {"high": "🔴", "medium": "🟠", "low": "🟢"}[r["severity"]]
+    """Alert text for Telegram. Canopy voice: short lines, plain words, no dashes."""
     lines = [
-        f"{emoji} <b>Ontario Forest Alert — {r['severity'].upper()}</b>",
+        f"🔥 <b>Canopy alert. Severity {r['severity'].upper()}.</b>",
         "",
-        f"🔥 Active fire detections today: <b>{r['today_count']}</b>",
-        f"📊 Yesterday: {r['yesterday_count']}  "
-        f"(change: {r['net_change']:+d}"
-        + (f", {r['pct_change']:+.0f}%" if r["pct_change"] is not None else "")
-        + ")",
-        f"🆕 New fire clusters detected: <b>{r['new_cluster_count']}</b>",
+        f"{r['today_count']} fires burning in Ontario right now.",
     ]
+    net = r["net_change"]
+    if net > 0:
+        lines.append(f"That is {net} more than yesterday.")
+    elif net < 0:
+        lines.append(f"That is {abs(net)} fewer than yesterday.")
+    else:
+        lines.append("Same count as yesterday.")
+
+    n = r["new_cluster_count"]
+    if n:
+        word = "cluster" if n == 1 else "clusters"
+        lines.append(f"We found {n} new fire {word} that did not exist yesterday.")
+        c = r["new_clusters"][0]
+        lines.append(
+            f"The biggest sits near ({c['lat']}, {c['lon']}) with {c['size']} "
+            f"detections pushing {c['total_frp']} MW."
+        )
     if r["is_anomaly"]:
         lines.append(
-            f"⚠️ Today is statistically unusual (z = {r['zscore']} vs 7-day baseline)"
-        )
-    for i, c in enumerate(r["new_clusters"][:3], 1):
-        lines.append(
-            f"   {i}. {c['size']} detections near ({c['lat']}, {c['lon']}), "
-            f"FRP {c['total_frp']} MW"
+            f"Today is unusual. The fire count is {r['zscore']} standard "
+            "deviations above the weekly norm."
         )
     lines.append("")
-    lines.append("🌲 CanopyAI / Forest Watch — Ontario monitoring")
+    lines.append("CanopyAI. Watching the forest so you don't have to.")
     return "\n".join(lines)

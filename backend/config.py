@@ -14,7 +14,7 @@ load_dotenv()
 # --- Secrets / keys (from .env) ---------------------------------------------
 FIRMS_MAP_KEY = os.getenv("FIRMS_MAP_KEY", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()  # optional, for AI briefings
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()  # optional, for AI briefings
 GFW_API_KEY = os.getenv("GFW_API_KEY", "").strip()  # optional, for live GFW loss stats
 
 # Grid cell size in degrees for the region-change visualization (~33 km).
@@ -82,7 +82,7 @@ class AlertSettings:
             "auto_alerts_enabled": self.auto_alerts_enabled,
             "telegram_bot_configured": bool(TELEGRAM_BOT_TOKEN),
             "firms_key_configured": bool(FIRMS_MAP_KEY),
-            "ai_configured": bool(ANTHROPIC_API_KEY),
+            "ai_configured": bool(GROQ_API_KEY),
             "gfw_configured": bool(GFW_API_KEY),
         }
 

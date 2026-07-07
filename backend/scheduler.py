@@ -41,11 +41,11 @@ async def run_analysis(send_if_alert: bool = True) -> dict:
         message = result["message"]
         imp = result["impact"]
         message += (
-            f"\n\n🌍 Est. impact today: ~{imp['area_km2']} km² · "
-            f"~{imp['co2_kilotonnes']} kt CO₂"
+            f"\n\nWe estimate about {imp['area_km2']} km2 burned today. "
+            f"Roughly {imp['co2_kilotonnes']} kt of CO2."
         )
         # If AI is configured, attach a short analyst briefing to the alert.
-        if config.ANTHROPIC_API_KEY:
+        if config.GROQ_API_KEY:
             try:
                 zones = await risk.risk_forecast(fires)
                 brief = await ai.generate_briefing({
@@ -57,7 +57,7 @@ async def run_analysis(send_if_alert: bool = True) -> dict:
                     "impact": imp,
                 })
                 if brief.get("ai"):
-                    message += "\n\n🤖 <b>AI briefing</b>\n" + brief["text"]
+                    message += "\n\n<b>Canopy's take</b>\n" + brief["text"]
             except Exception as exc:
                 log.warning("AI briefing failed: %s", exc)
         alert_status = await alerts.send_telegram(message)

@@ -52,13 +52,13 @@ https://firms.modaps.eosdis.nasa.gov/api/map_key/ — enter your email, copy the
 ### 2. Telegram bot (free, required for alerts)
 Message **@BotFather** → `/newbot` → copy the token. Then message your new bot once.
 
-### 3. Anthropic key (optional — for AI briefings)
-https://console.anthropic.com/ — without it, briefings use a plain template.
+### 3. Groq key (optional — for AI briefings)
+https://console.groq.com/ — without it, briefings use a plain template.
 
 ### 4. Install + configure
 ```bash
 cd forest-watch
-cp .env.example .env        # paste FIRMS_MAP_KEY, TELEGRAM_BOT_TOKEN, (optional ANTHROPIC_API_KEY)
+cp .env.example .env        # paste FIRMS_MAP_KEY, TELEGRAM_BOT_TOKEN, (optional GROQ_API_KEY)
 python -m venv .venv && .venv\Scripts\Activate.ps1   # mac/linux: source .venv/bin/activate
 pip install -r requirements.txt
 ```

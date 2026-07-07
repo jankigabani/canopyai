@@ -12,6 +12,8 @@ FastAPI app that powers the Ontario-focused dashboard:
 No database — data is fetched live from FIRMS and alert config lives in memory.
 """
 import logging
+import math
+import time
 from pathlib import Path
 
 import httpx
@@ -20,7 +22,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, alerts, config, firms, gfw_api, impact, regions, risk, scheduler
+from . import ai, alerts, config, firms, gfw_api, impact, regions, risk, scheduler, weather
 
 logging.basicConfig(level=logging.INFO)
 
@@ -144,9 +146,15 @@ async def timelapse(days: int = Query(5, ge=2, le=5)):
     return {"frames": frames}
 
 
-@app.post("/api/briefing")
-async def briefing():
-    """Generate an AI situation briefing from the current data."""
+# Live context for the AI features, cached briefly so chat stays snappy.
+_CTX_TTL = 120
+_ctx_cache = {"at": 0.0, "ctx": None}
+
+
+async def _live_context():
+    now = time.monotonic()
+    if _ctx_cache["ctx"] and now - _ctx_cache["at"] < _CTX_TTL:
+        return _ctx_cache["ctx"]
     result = await scheduler.run_analysis(send_if_alert=False)
     fires = await _ontario_fires(5)
     today, _ = firms.split_today_yesterday(fires)
@@ -159,8 +167,84 @@ async def briefing():
         "top_risk": zones[:5],
         "impact": impact.estimate(today),
     }
+    _ctx_cache.update(at=now, ctx=ctx)
+    return ctx
+
+
+@app.post("/api/briefing")
+async def briefing():
+    """Generate an AI situation briefing from the current data."""
+    ctx = await _live_context()
     out = await ai.generate_briefing(ctx)
     return {**out, "context": ctx}
+
+
+class AskBody(BaseModel):
+    question: str
+
+
+@app.post("/api/ask")
+async def ask(body: AskBody):
+    """Ask Canopy. Chat over the live forest data."""
+    q = body.question.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Empty question")
+    ctx = await _live_context()
+    return await ai.answer_question(q[:500], ctx)
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+@app.get("/api/inspect")
+async def inspect_point(lat: float = Query(...), lon: float = Query(...)):
+    """Point intelligence. Click anywhere, get the live picture for that spot."""
+    try:
+        fires = await firms.fetch_fires(config.CANADA_BBOX, days=3)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    ranked = sorted(
+        ((_haversine_km(lat, lon, f["lat"], f["lon"]), f) for f in fires),
+        key=lambda t: t[0],
+    )
+    within_25 = sum(1 for d, _ in ranked if d <= 25)
+    within_100 = sum(1 for d, _ in ranked if d <= 100)
+    nearest = [
+        {"km": round(d, 1), "lat": f["lat"], "lon": f["lon"],
+         "frp": f["frp"], "date": f["acq_date"]}
+        for d, f in ranked[:3]
+    ]
+
+    wx = await weather.fire_weather_risk([(lat, lon)])
+    w = wx[0] if wx else None
+
+    if within_25:
+        headline = f"This spot is hot. {within_25} fires within 25 km."
+    elif within_100:
+        headline = f"Nothing on top of this spot, but {within_100} fires within 100 km. Worth watching."
+    else:
+        headline = "Quiet right now. No fires within 100 km."
+    if w:
+        headline += (
+            f" Tomorrow looks {w['label'].lower()} risk here. "
+            f"{w['temp_c']} C, wind {w['wind_kmh']} km/h, humidity {w['humidity_pct']} percent."
+        )
+
+    return {
+        "lat": lat, "lon": lon,
+        "province": config.province_for(lat, lon),
+        "fires_within_25km": within_25,
+        "fires_within_100km": within_100,
+        "nearest": nearest,
+        "weather": w,
+        "headline": headline,
+    }
 
 
 # --- GFW tile proxy (same-origin, so the browser can decode pixels) ---------
@@ -204,6 +288,30 @@ async def tile_dist(z: int, x: int, y: int):
 
 
 # --- GFW-style region dashboard ---------------------------------------------
+@app.get("/api/ontario/live")
+async def ontario_live():
+    """Live fire counts per Ontario district, from a single FIRMS fetch."""
+    fires = await _ontario_fires(5)
+    today, _ = firms.split_today_yesterday(fires)
+    districts = []
+    for cid in regions.REGIONS["ON"]["children"]:
+        r = regions.REGIONS.get(cid)
+        if not r:
+            continue
+        w, s, e, n = r["bbox"]
+
+        def inside(f, w=w, s=s, e=e, n=n):
+            return s <= f["lat"] <= n and w <= f["lon"] <= e
+
+        districts.append({
+            "id": cid, "name": r["name"],
+            "today": sum(1 for f in today if inside(f)),
+            "period": sum(1 for f in fires if inside(f)),
+        })
+    districts.sort(key=lambda d: d["today"], reverse=True)
+    return {"total_today": len(today), "districts": districts}
+
+
 @app.get("/api/regions")
 def region_catalog():
     """Region tree for the breadcrumb / drill-down selector."""
@@ -295,8 +403,8 @@ async def telegram_chat_ids():
 async def test_alert():
     """Send a test message to the configured Telegram chat."""
     status = await alerts.send_telegram(
-        "✅ <b>Forest Watch test alert</b>\n"
-        "Your Ontario forest alerts are wired up correctly. 🌲"
+        "<b>Canopy here. Test alert.</b>\n"
+        "Your phone hookup works. You're all set."
     )
     if not status.get("ok"):
         raise HTTPException(status_code=400, detail=status.get("error"))
@@ -327,4 +435,8 @@ if FRONTEND_DIR.exists():
 
     @app.get("/")
     def index():
-        return FileResponse(FRONTEND_DIR / "index.html")
+        # no-cache so UI updates always reach the browser
+        return FileResponse(
+            FRONTEND_DIR / "index.html",
+            headers={"Cache-Control": "no-cache"},
+        )

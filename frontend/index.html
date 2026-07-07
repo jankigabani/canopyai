@@ -3,104 +3,183 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CanopyAI — Forest Watch</title>
+  <title>CanopyAI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=9" />
 </head>
 <body>
-  <!-- Top navigation (GFW-style) -->
+  <!-- Top navigation -->
   <header id="topnav">
-    <div class="logo">🌲<span>CANOPY<br>AI</span></div>
+    <div class="brand">
+      <div class="logo-mark">C</div>
+      <span class="wordmark">CanopyAI</span>
+    </div>
     <nav>
-      <a data-view="map" class="nav-link active">MAP</a>
-      <a data-view="dash" class="nav-link">DASHBOARD</a>
+      <a data-view="map" class="nav-link active">Map</a>
+      <a data-view="dash" class="nav-link">Dashboard</a>
     </nav>
-    <div class="nav-right">Predictive Forest Intelligence — Canada</div>
+    <div class="nav-right">
+      <span class="micro-label">Ontario forest intelligence</span>
+      <span class="live-pill"><span class="pulse"></span>Live</span>
+    </div>
   </header>
 
   <!-- ============ MAP VIEW ============ -->
   <section id="view-map" class="view">
     <div id="bigmap"></div>
 
+    <!-- Left icon rail -->
+    <aside id="rail">
+      <button class="rail-btn active" id="railLoss" title="Tree cover loss">
+        <svg viewBox="0 0 24 24"><path d="M12 2 6.5 10h3L5 17h6v5h2v-5h6l-4.5-7h3L12 2z"/></svg>
+        <span>Loss</span>
+      </button>
+      <button class="rail-btn active" id="railFire" title="Active fires">
+        <svg viewBox="0 0 24 24"><path d="M12 2c1.5 4.5-3.5 6-3.5 10a5.5 5.5 0 0 0 11 0c0-2.2-1-4-2.3-5.6-.4 1.7-1.4 2.6-2.2 2.8.7-2.3.3-5-3-7.2z"/></svg>
+        <span>Fires</span>
+      </button>
+      <button class="rail-btn active" id="railDist" title="Vegetation disturbance">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+        <span>Disturb</span>
+      </button>
+      <button class="rail-btn" id="railRisk" title="Fire risk forecast">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></svg>
+        <span>Risk</span>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-loc" id="locOn" title="Fly to Ontario">ON</button>
+      <button class="rail-loc" id="locCa" title="Fly to Canada">CA</button>
+    </aside>
+
+    <!-- Layer panel -->
     <div id="mapPanel">
       <div class="panel-tabs">
-        <button class="ptab active" data-ptab="legend">▤ LEGEND</button>
-        <button class="ptab" data-ptab="analysis">▥ ANALYSIS</button>
+        <button class="ptab active" data-ptab="legend">Layers</button>
+        <button class="ptab" data-ptab="analysis">Insights</button>
       </div>
 
       <div id="ptab-legend" class="ptab-body">
-        <!-- Combined live-disturbance quick toggle -->
-        <button id="liveDisturb" class="live-btn">⚡ Live disturbance (fires + DIST-ALERT)</button>
 
-        <!-- Tree cover loss -->
         <div class="layer-card">
-          <div class="layer-head">
-            <label class="lyr"><input type="checkbox" id="lyrLoss" checked /> <span class="dot pink"></span> Tree cover loss</label>
-            <span class="lyr-year" id="lossYearLabel">2001–2024</span>
+          <div class="layer-top">
+            <span class="dot pink"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Tree cover loss</div>
+              <div class="layer-sub">Hansen UMD · annual · 2001 to 2024</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrLoss" checked /><span class="track"></span></label>
           </div>
-          <div class="layer-sub">Canopy density
-            <select id="canopy">
-              <option>&gt; 10%</option><option>&gt; 15%</option>
-              <option selected>&gt; 30%</option><option>&gt; 50%</option><option>&gt; 75%</option>
-            </select>
+          <div class="layer-body">
+            <div class="ctl-row">
+              <span class="ctl-label">Canopy density</span>
+              <select id="canopy">
+                <option>&gt; 10%</option><option>&gt; 15%</option>
+                <option selected>&gt; 30%</option><option>&gt; 50%</option><option>&gt; 75%</option>
+              </select>
+              <span class="ctl-value" id="lossYearLabel">2001-2024</span>
+            </div>
+            <input type="range" id="lossYear" min="2001" max="2024" value="2024" />
+            <div class="ticks"><span>2001</span><span>2012</span><span>2024</span></div>
+            <div class="ctl-row"><span class="ctl-label">Opacity</span><input type="range" id="lossOpacity" min="0" max="100" value="90" /></div>
+            <p class="layer-note">Loss is not always deforestation.</p>
           </div>
-          <input type="range" id="lossYear" min="2001" max="2024" value="2024" />
-          <div class="ticks"><span>2001</span><span>2012</span><span>2024</span></div>
-          <div class="opacity-row">Opacity <input type="range" id="lossOpacity" min="0" max="100" value="90" /></div>
-          <div class="note">Tree cover loss is not always deforestation.</div>
         </div>
 
-        <!-- Active fires (live, our data) -->
         <div class="layer-card">
-          <div class="layer-head">
-            <label class="lyr"><input type="checkbox" id="lyrFire" checked /> <span class="dot red"></span> Active fires <em>live</em></label>
+          <div class="layer-top">
+            <span class="dot red"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Active fires <span class="tag live">live</span></div>
+              <div class="layer-sub">NASA FIRMS · about 3 h behind · last 3 days</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrFire" checked /><span class="track"></span></label>
           </div>
-          <div class="note">NASA FIRMS near-real-time (last 3 days).</div>
         </div>
 
-        <!-- OPERA DIST-ALERT: near-real-time vegetation disturbance (GLOBAL) -->
         <div class="layer-card">
-          <div class="layer-head">
-            <label class="lyr"><input type="checkbox" id="lyrDist" /> <span class="dot violet"></span> Vegetation disturbance <em>DIST-ALERT · live</em></label>
+          <div class="layer-top">
+            <span class="dot violet"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Vegetation disturbance <span class="tag live">live</span></div>
+              <div class="layer-sub">OPERA DIST-ALERT · every 2 to 4 days · global</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrDist" checked /><span class="track"></span></label>
           </div>
-          <div class="opacity-row">Opacity <input type="range" id="distOpacity" min="0" max="100" value="85" /></div>
-          <div class="note">OPERA/UMD near-real-time (every 2–4 days) — GLOBAL, including boreal Canada. Fire scars, logging, harvest, dieback.</div>
+          <div class="layer-body">
+            <div class="ctl-row"><span class="ctl-label">Opacity</span><input type="range" id="distOpacity" min="0" max="100" value="85" /></div>
+            <p class="layer-note">Catches fire scars, logging, harvest and dieback. Covers boreal Canada.</p>
+          </div>
         </div>
 
-        <!-- GLAD/RADD deforestation alerts (tropical) -->
         <div class="layer-card">
-          <div class="layer-head">
-            <label class="lyr"><input type="checkbox" id="lyrGlad" /> <span class="dot magenta"></span> Deforestation alerts <em>GLAD/RADD</em></label>
+          <div class="layer-top">
+            <span class="dot magenta"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Tropical deforestation</div>
+              <div class="layer-sub">GLAD and RADD · Amazon, Congo, SE Asia</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrGlad" /><span class="track"></span></label>
           </div>
-          <div class="opacity-row">Opacity <input type="range" id="gladOpacity" min="0" max="100" value="80" /></div>
-          <div class="note">Near-real-time — tropical forests only (Amazon, Congo, SE Asia).</div>
+          <div class="layer-body">
+            <div class="ctl-row"><span class="ctl-label">Opacity</span><input type="range" id="gladOpacity" min="0" max="100" value="80" /></div>
+          </div>
         </div>
 
-        <!-- Risk forecast (our predictive layer) -->
         <div class="layer-card">
-          <div class="layer-head">
-            <label class="lyr"><input type="checkbox" id="lyrRisk" /> <span class="dot orange"></span> Fire risk forecast <em>AI</em></label>
+          <div class="layer-top">
+            <span class="dot orange"></span>
+            <div class="layer-titles">
+              <div class="layer-title">Fire risk forecast <span class="tag ai">AI</span></div>
+              <div class="layer-sub">Weather crossed with fire density · tomorrow</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="lyrRisk" /><span class="track"></span></label>
           </div>
-          <div class="note">Where fire is likely next (weather × density).</div>
         </div>
 
-        <!-- Basemap -->
-        <div class="basemap-card">
-          <label class="lyr"><input type="checkbox" id="baseSat" /> 🛰️ Satellite imagery</label>
-        </div>
       </div>
 
       <div id="ptab-analysis" class="ptab-body" hidden>
         <div class="analysis-box" id="mapAnalysis">Loading live analysis…</div>
       </div>
+
+      <div class="basemap-bar">
+        <span>Satellite imagery</span>
+        <label class="switch dark"><input type="checkbox" id="baseSat" /><span class="track"></span></label>
+      </div>
     </div>
 
-    <div id="mapLegend" class="map-legend">
-      <b>Legend</b>
-      <div><span class="sw" style="background:#ff5db1"></span> Tree cover loss (annual, 2001–2024)</div>
-      <div><span class="sw" style="background:#e0433f"></span> Active fire (live, ~3h)</div>
-      <div><span class="sw" style="background:#7b2cbf"></span> Vegetation disturbance (DIST-ALERT, 2–4d)</div>
-      <div><span class="sw" style="background:#dd1c77"></span> Deforestation alert (GLAD/RADD, tropics)</div>
+    <!-- Map tools -->
+    <div class="map-tools">
+      <button id="inspectBtn" class="tool-btn" title="Click anywhere on the map for a live site report">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+        Inspect
+      </button>
+    </div>
+
+    <!-- Ask Canopy chat -->
+    <div id="chatDock" class="chat-dock">
+      <button id="chatHead" class="chat-head">
+        <span class="chat-dot"></span> Ask Canopy <span class="tag ai">AI</span>
+        <span class="chat-chev">▾</span>
+      </button>
+      <div id="chatBody" class="chat-body">
+        <div id="chatLog" class="chat-log">
+          <div class="msg bot">hey, i'm canopy. i'm watching the live data. ask me what's happening out there.</div>
+        </div>
+        <form id="chatForm" class="chat-form">
+          <input id="chatInput" placeholder="Ask about fires, risk, any region…" autocomplete="off" />
+          <button class="chat-send" type="submit" aria-label="Send">↑</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="mapLegend" class="legend-chips">
+      <span class="chip"><span class="sw" style="background:#dc6699"></span>Tree cover loss</span>
+      <span class="chip"><span class="sw" style="background:#dc2626"></span>Active fires</span>
+      <span class="chip"><span class="sw" style="background:#7b2cbf"></span>Disturbance</span>
     </div>
     <div id="mapStatus" class="map-status">Loading…</div>
   </section>
@@ -108,9 +187,12 @@
   <!-- ============ DASHBOARD VIEW ============ -->
   <section id="view-dash" class="view" hidden>
     <div class="dash-left">
-      <div class="dash-actions">
-        <button class="pill" id="shareBtn">⤴ SHARE</button>
-        <button class="pill ghost" id="downloadBtn">⬇ DOWNLOAD</button>
+      <div class="dash-head">
+        <span class="micro-label">Region</span>
+        <div class="dash-actions">
+          <button class="pill ghost" id="shareBtn">Share</button>
+          <button class="pill ghost" id="downloadBtn">Download</button>
+        </div>
       </div>
 
       <div id="breadcrumb" class="breadcrumb"></div>
@@ -119,58 +201,74 @@
       <p id="dashSummary" class="dash-summary">Loading…</p>
 
       <div class="dash-tabs">
-        <button class="dtab active" data-dtab="summary">SUMMARY</button>
-        <button class="dtab" data-dtab="forest">FOREST CHANGE</button>
-        <button class="dtab" data-dtab="fires">FIRES</button>
+        <button class="dtab active" data-dtab="summary">Summary</button>
+        <button class="dtab" data-dtab="forest">Forest change</button>
+        <button class="dtab" data-dtab="fires">Fires</button>
       </div>
 
       <!-- SUMMARY -->
       <div id="dtab-summary" class="dtab-body">
-        <div class="metric-row">
-          <div class="metric"><div class="metric-num" id="mForest">–</div><div class="metric-lbl">Mha natural forest</div></div>
-          <div class="metric"><div class="metric-num" id="mLoss">–</div><div class="metric-lbl" id="mLossLbl">forest lost</div></div>
-          <div class="metric"><div class="metric-num" id="mCo2">–</div><div class="metric-lbl">CO₂ emissions</div></div>
+        <div class="metric-grid">
+          <div class="metric"><div class="metric-num" id="mForest">…</div><div class="metric-lbl">Mha natural forest</div></div>
+          <div class="metric"><div class="metric-num" id="mLoss">…</div><div class="metric-lbl" id="mLossLbl">forest lost</div></div>
+          <div class="metric"><div class="metric-num" id="mCo2">…</div><div class="metric-lbl">CO₂ emissions</div></div>
         </div>
-        <p class="dash-intro" id="dashIntro"></p>
+
+        <div class="section" id="districtSection" hidden>
+          <span class="micro-label">Live right now · Ontario districts</span>
+          <div id="districtTable" class="district-table"></div>
+        </div>
+
+        <div class="section">
+          <span class="micro-label">Latest detections</span>
+          <div id="alertFeed" class="alert-feed">Loading…</div>
+        </div>
+
         <div class="source-tag" id="sourceTag"></div>
       </div>
 
       <!-- FOREST CHANGE -->
       <div id="dtab-forest" class="dtab-body" hidden>
-        <div class="metric-row">
-          <div class="metric"><div class="metric-num" id="fLoss">–</div><div class="metric-lbl" id="fLossLbl">lost</div></div>
-          <div class="metric"><div class="metric-num" id="fPct">–</div><div class="metric-lbl">of land area is forest</div></div>
+        <div class="metric-grid">
+          <div class="metric"><div class="metric-num" id="fLoss">…</div><div class="metric-lbl" id="fLossLbl">lost</div></div>
+          <div class="metric"><div class="metric-num" id="fPct">…</div><div class="metric-lbl">of land area is forest</div></div>
         </div>
-        <div class="chart-title">Tree cover loss by year <span id="lossLiveTag"></span></div>
-        <canvas id="lossYearChart" height="150"></canvas>
-        <p class="dash-intro">Tree cover loss shown on the map in pink — use the
-          <a class="link" data-view="map">MAP</a> year slider to filter it. Loss is not always deforestation.</p>
+        <div class="section">
+          <span class="micro-label">Tree cover loss by year <span id="lossLiveTag"></span></span>
+          <canvas id="lossYearChart" height="150"></canvas>
+        </div>
+        <p class="dash-intro">Loss shows on the map in pink. Use the year slider on the
+          <a class="link" data-view="map">map</a> to filter it. Loss is not always deforestation.</p>
         <div class="source-tag" id="sourceTag2"></div>
       </div>
 
-      <!-- FIRES (live + ML + alerts) -->
+      <!-- FIRES -->
       <div id="dtab-fires" class="dtab-body" hidden>
-        <div class="metric-row">
-          <div class="metric"><div class="metric-num" id="firToday">–</div><div class="metric-lbl">fires today (live)</div></div>
-          <div class="metric"><div class="metric-num" id="firArea">–</div><div class="metric-lbl">km² burned (est)</div></div>
-          <div class="metric"><div class="metric-num" id="firCo2">–</div><div class="metric-lbl">kt CO₂ (est)</div></div>
+        <div class="metric-grid">
+          <div class="metric"><div class="metric-num" id="firToday">…</div><div class="metric-lbl">fires today, live</div></div>
+          <div class="metric"><div class="metric-num" id="firArea">…</div><div class="metric-lbl">km² burned, estimate</div></div>
+          <div class="metric"><div class="metric-num" id="firCo2">…</div><div class="metric-lbl">kt CO₂, estimate</div></div>
         </div>
-        <canvas id="fireTrend" height="120"></canvas>
+        <div class="section">
+          <span class="micro-label">Fires per day</span>
+          <canvas id="fireTrend" height="120"></canvas>
+        </div>
 
         <div class="sub-card">
-          <div class="sub-title">🧠 ML change-detection</div>
-          <button class="pill full" id="runNow">Run ML check now</button>
+          <div class="sub-title">ML change detection</div>
+          <button class="pill full" id="runNow">Run check now</button>
           <div id="analysisResult" class="analysis"></div>
         </div>
 
         <div class="sub-card">
-          <div class="sub-title">🚨 Phone alerts (Telegram)</div>
+          <div class="sub-title">Phone alerts</div>
+          <p class="hint">Message your Telegram bot once, then find your chat ID.</p>
           <button class="pill ghost mini" id="findChat">Find my chat ID</button>
-          <div id="chatResult" class="note"></div>
+          <div id="chatResult" class="hint"></div>
           <label class="fld">Chat ID <input type="text" id="chatId" placeholder="123456789" /></label>
           <div class="row">
             <button class="pill mini" id="saveCfg">Save</button>
-            <button class="pill ghost mini" id="testAlert">Test alert</button>
+            <button class="pill ghost mini" id="testAlert">Send test alert</button>
           </div>
           <div id="alertLog" class="log">No alerts yet.</div>
         </div>
@@ -182,6 +280,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>

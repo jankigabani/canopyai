@@ -1,4 +1,4 @@
-# 🌲 CanopyAI — Predictive Forest Intelligence
+# CanopyAI - Predictive Forest Intelligence
 
 A local "Global Forest Watch"-class platform, but **predictive and agentic** instead
 of retrospective. Focused on **Canadian forests (Ontario)**, it pulls near-real-time

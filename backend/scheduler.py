@@ -7,12 +7,17 @@ jobs: a GOES watcher (every 2 minutes, minutes-level fire detection) and a
 lightning ignition check (every 5 minutes). Both push to the live WebSocket
 feed.
 """
+import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from . import ai, alerts, analysis, config, firms, impact, lightning, live, protected, risk
+from . import (
+    ai, alerts, analysis, config, firms, gfw_alerts, impact, lightning, live,
+    protected, risk,
+)
 
 log = logging.getLogger("forest-watch")
 
@@ -184,6 +189,80 @@ async def _ignition_job():
         log.warning("Ignition check failed: %s", exc)
 
 
+# Previous DIST fetch, persisted so restarts don't lose the comparison base.
+_DIST_STATE_FILE = Path(__file__).resolve().parent.parent / ".dist_state.json"
+# Ignore reprocessing wiggles below this; a real new pass adds thousands of ha.
+_DIST_DELTA_MIN_HA = 250
+
+
+def _load_dist_state():
+    try:
+        return json.loads(_DIST_STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+async def _dist_alert_job():
+    """
+    Refresh the current-year disturbance stats for Ontario and compare with
+    the previous fetch. When a new satellite pass lands, tell the phone how
+    much fresh disturbance it brought.
+    """
+    try:
+        data = await gfw_alerts.alerts_this_year(config.ONTARIO_BBOX, force=True)
+    except Exception as exc:
+        log.warning("DIST-ALERT refresh failed: %s", exc)
+        return
+    if not data:
+        return
+    log.info(
+        "DIST-ALERT %s: %s ha YTD in Ontario, latest %s",
+        data["year"], data["total_ha"], data["latest_date"],
+    )
+
+    prev = _load_dist_state()
+    try:
+        _DIST_STATE_FILE.write_text(json.dumps({
+            "year": data["year"],
+            "total_ha": data["total_ha"],
+            "latest_date": data["latest_date"],
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }))
+    except OSError as exc:
+        log.warning("Could not persist DIST state: %s", exc)
+
+    if not prev or prev.get("year") != data["year"]:
+        return  # first fetch (or new year): nothing to compare against yet
+
+    delta = data["total_ha"] - prev.get("total_ha", 0)
+    new_pass = data["latest_date"] != prev.get("latest_date")
+    if delta < _DIST_DELTA_MIN_HA and not (new_pass and delta > 0):
+        return
+
+    await live.emit(
+        "alert",
+        f"New satellite pass. {delta:,} ha of fresh disturbance detected in "
+        f"Ontario since the last check. {data['year']} total is now "
+        f"{data['total_ha']:,} ha.",
+        severity="medium",
+    )
+    if config.settings.auto_alerts_enabled:
+        wow = data.get("wow_pct")
+        wow_line = (
+            f"That is {'up' if wow > 0 else 'down'} {abs(wow)} percent on the week before.\n"
+            if wow is not None else ""
+        )
+        await alerts.send_telegram(
+            "🛰 <b>Canopy satellite update.</b>\n\n"
+            f"Fresh vegetation disturbance in Ontario: {delta:,} ha since the last check.\n"
+            f"That brings {data['year']} to {data['total_ha']:,} ha.\n"
+            f"Last 7 days: {data['last7_ha']:,} ha.\n"
+            + wow_line +
+            f"Latest detection {data['latest_date']}.\n\n"
+            "CanopyAI. Watching the forest so you don't have to."
+        )
+
+
 def start_scheduler():
     """Start the background jobs (no-op if no FIRMS key configured)."""
     global _scheduler
@@ -196,6 +275,10 @@ def start_scheduler():
     _scheduler.add_job(_hourly_job, "interval", hours=1, id="ontario_check")
     _scheduler.add_job(_goes_job, "interval", minutes=2, id="goes_watch")
     _scheduler.add_job(_ignition_job, "interval", minutes=5, id="ignition_watch")
+    _scheduler.add_job(
+        _dist_alert_job, "interval", hours=6, id="dist_alert_prefetch",
+        next_run_time=datetime.now(timezone.utc),
+    )
     _scheduler.start()
     log.info(
         "Scheduler started — hourly Ontario check, GOES watch every 2 min, "

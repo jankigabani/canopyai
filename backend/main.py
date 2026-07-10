@@ -25,8 +25,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
-    ai, air, alerts, config, firms, gfw_api, impact, lightning, live,
-    protected, regions, risk, scheduler, weather,
+    ai, air, alerts, config, firms, gfw_alerts, gfw_api, impact, lightning,
+    live, protected, regions, risk, scheduler, weather,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -243,6 +243,16 @@ async def _live_context():
     today, _ = firms.split_today_yesterday(fires)
     zones = await risk.risk_forecast(fires)
     smoke = await air.city_smoke()
+    dist = gfw_alerts.get_cached(config.ONTARIO_BBOX)
+    dist_summary = (
+        {
+            **{k: dist[k] for k in (
+                "year", "total_ha", "latest_date", "last7_ha", "prev7_ha",
+                "wow_pct", "source")},
+            "monthly": dist["monthly"],
+        }
+        if dist else None
+    )
     goes_recent = [
         f for f in scheduler.GOES_LATEST["fires"]
         if (_fire_age_min(f) or 9999) <= 60
@@ -256,6 +266,7 @@ async def _live_context():
         "top_risk": zones[:5],
         "impact": impact.estimate(today),
         "goes_hotspots_last_hour": len(goes_recent),
+        "disturbance_this_year_ontario": dist_summary,
         "smoke_worst_cities": smoke[:3],
         "lightning": {
             "feed_connected": lightning.STATE["connected"],
@@ -445,6 +456,24 @@ async def ontario_live():
         })
     districts.sort(key=lambda d: d["today"], reverse=True)
     return {"total_today": len(today), "districts": districts}
+
+
+@app.get("/api/region/{region_id}/alerts")
+async def region_alerts_this_year(region_id: str):
+    """
+    Current-year disturbance alerts (weekly + monthly) for a region.
+    Heavy query (10-60s cold), cached 6h — the frontend loads it async.
+    """
+    r = regions.get(region_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Unknown region")
+    data = await gfw_alerts.alerts_this_year(tuple(r["bbox"]))
+    if not data:
+        raise HTTPException(
+            status_code=502,
+            detail="Live alert stats unavailable (GFW key missing or query failed)",
+        )
+    return {"id": region_id, **data}
 
 
 @app.get("/api/regions")

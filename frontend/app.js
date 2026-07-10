@@ -84,14 +84,34 @@ function decodeGlad(imageData) {
     d[i + 3] = 190;
   }
 }
-// OPERA DIST-ALERT: blue over 200 means confirmed disturbance.
+// OPERA DIST-ALERT: each pixel carries its detection date.
+// day-number = R*255 + G, counted from 2021-01-01. Blue >= 200 = high confidence.
+// (Encoding verified against the GFW Data API point queries.)
+const DIST_EPOCH = Date.UTC(2021, 0, 1);
+const MS_DAY = 86400000;
+let distWeeks = 0; // 0 = this year · N = last N weeks · -1 = everything
+function distCutoffDay() {
+  if (distWeeks === -1) return 0;
+  if (distWeeks === 0) return Math.floor((Date.UTC(new Date().getUTCFullYear(), 0, 1) - DIST_EPOCH) / MS_DAY);
+  return Math.floor((Date.now() - distWeeks * 7 * MS_DAY - DIST_EPOCH) / MS_DAY);
+}
 function decodeDist(imageData) {
   const d = imageData.data;
+  const cutoff = distCutoffDay();
+  const today = Math.floor((Date.now() - DIST_EPOCH) / MS_DAY);
   for (let i = 0; i < d.length; i += 4) {
     if (!d[i + 3]) continue;
+    const day = d[i] * 255 + d[i + 1];
+    if (day < cutoff) { d[i + 3] = 0; continue; }
     const high = d[i + 2] >= 200;
-    d[i] = high ? 123 : 177; d[i + 1] = high ? 44 : 122; d[i + 2] = high ? 191 : 220;
-    d[i + 3] = 200;
+    if (today - day <= 14) {
+      // fresh: hot rose so this week's change jumps off the map
+      d[i] = 225; d[i + 1] = 29; d[i + 2] = 72;
+      d[i + 3] = high ? 235 : 190;
+    } else {
+      d[i] = high ? 123 : 177; d[i + 1] = high ? 44 : 122; d[i + 2] = high ? 191 : 220;
+      d[i + 3] = high ? 205 : 150;
+    }
   }
 }
 
@@ -276,6 +296,7 @@ Object.keys(LAYERS).forEach((chkId) => {
 
 $("lossOpacity").addEventListener("input", (e) => { lossLayer.setOpacity(e.target.value / 100); if (miniLoss) miniLoss.setOpacity(e.target.value / 100); });
 $("distOpacity").addEventListener("input", (e) => distLayer.setOpacity(e.target.value / 100));
+$("distSince").addEventListener("change", (e) => { distWeeks = +e.target.value; distLayer.redecode(); });
 $("gladOpacity").addEventListener("input", (e) => gladLayer.setOpacity(e.target.value / 100));
 $("lossYear").addEventListener("input", (e) => {
   lossEnd = +e.target.value; $("lossYearLabel").textContent = `${lossStart}-${lossEnd}`;
@@ -387,7 +408,42 @@ const minimap = L.map("minimap", { zoomControl: true }).setView(VIEWS.ontario.ce
 minimap.createPane("mloss"); minimap.getPane("mloss").style.zIndex = 350;
 baseLight().addTo(minimap);
 const miniLoss = decodeGridLayer({ pane: "mloss", opacity: 0.9, urlFn: lossUrl, decode: decodeLoss }).addTo(minimap);
-let miniBox = null, catalog = {}, trendChart, lossChart;
+let miniBox = null, catalog = {}, trendChart, lossChart, alertChart;
+let alertReq = 0;
+
+// Current-year disturbance alerts (slow query server-side, cached 6h) —
+// loaded async so the dashboard never waits on it.
+async function loadRegionAlerts(id) {
+  const req = ++alertReq;
+  $("aYtd").textContent = "…"; $("aWeek").textContent = "…"; $("aWow").textContent = "…";
+  $("aLatest").textContent = "computing, first load can take a minute";
+  try {
+    const d = await api(`/api/region/${id}/alerts`);
+    if (req !== alertReq) return; // user moved to another region meanwhile
+    $("aYtd").textContent = d.total_ha.toLocaleString();
+    $("aYtdLbl").textContent = `ha disturbed in ${d.year}`;
+    $("aWeek").textContent = d.last7_ha.toLocaleString();
+    $("aWow").textContent = d.wow_pct == null ? "–" : `${d.wow_pct > 0 ? "+" : ""}${d.wow_pct}%`;
+    $("aWow").style.color = d.wow_pct > 25 ? "var(--red)" : d.wow_pct < -25 ? "var(--accent-ink)" : "";
+    $("aLatest").textContent = `latest detection ${d.latest_date}`;
+    const labels = d.weekly.map((w) => w.week.slice(5));
+    const values = d.weekly.map((w) => w.area_ha);
+    if (alertChart) {
+      alertChart.data.labels = labels; alertChart.data.datasets[0].data = values; alertChart.update();
+    } else {
+      alertChart = new Chart($("alertWeeklyChart"), {
+        type: "bar", data: { labels, datasets: [{ label: "ha", data: values, backgroundColor: "#7b2cbf", borderRadius: 3 }] },
+        options: { plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: "#98a2b3", font: { size: 9 } }, grid: { display: false } },
+                    y: { ticks: { color: "#98a2b3", font: { size: 9 } }, grid: { color: "#f2f4f7" } } } },
+      });
+    }
+  } catch (e) {
+    if (req !== alertReq) return;
+    $("aYtd").textContent = "?"; $("aWeek").textContent = "?"; $("aWow").textContent = "?";
+    $("aLatest").textContent = "unavailable right now";
+  }
+}
 
 async function loadCatalog() { (await api("/api/regions")).regions.forEach((r) => (catalog[r.id] = r)); }
 
@@ -420,6 +476,7 @@ async function loadRegion(id) {
   $("sourceTag2").textContent = `Source: ${f.source}`;
 
   renderLossChart(r);
+  loadRegionAlerts(r.id);
 
   const fi = r.fires;
   $("firToday").textContent = fi.error ? "?" : fi.today;

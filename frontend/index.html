@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/static/styles.css?v=11" />
+  <link rel="stylesheet" href="/static/styles.css?v=13" />
 </head>
 <body>
   <!-- Top navigation -->
@@ -154,13 +154,22 @@
             <span class="dot violet"></span>
             <div class="layer-titles">
               <div class="layer-title">Vegetation disturbance <span class="tag live">live</span></div>
-              <div class="layer-sub">OPERA DIST-ALERT · every 2 to 4 days · global</div>
+              <div class="layer-sub">OPERA DIST-ALERT · every 2 to 4 days · dated per pixel</div>
             </div>
             <label class="switch"><input type="checkbox" id="lyrDist" checked /><span class="track"></span></label>
           </div>
           <div class="layer-body">
+            <div class="ctl-row">
+              <span class="ctl-label">Show</span>
+              <select id="distSince">
+                <option value="0" selected>This year</option>
+                <option value="4">Last 4 weeks</option>
+                <option value="8">Last 8 weeks</option>
+                <option value="-1">All alerts</option>
+              </select>
+            </div>
             <div class="ctl-row"><span class="ctl-label">Opacity</span><input type="range" id="distOpacity" min="0" max="100" value="85" /></div>
-            <p class="layer-note">Catches fire scars, logging, harvest and dieback. Covers boreal Canada.</p>
+            <p class="layer-note">Bright rose means detected in the last two weeks. Violet is older. Catches fire scars, logging and dieback. Covers boreal Canada.</p>
           </div>
         </div>
 
@@ -234,7 +243,8 @@
       <span class="chip"><span class="sw" style="background:#dc6699"></span>Tree cover loss</span>
       <span class="chip"><span class="sw" style="background:#f59e0b"></span>Flash fires</span>
       <span class="chip"><span class="sw" style="background:#dc2626"></span>Active fires</span>
-      <span class="chip"><span class="sw" style="background:#7b2cbf"></span>Disturbance</span>
+      <span class="chip"><span class="sw" style="background:#e11d48"></span>New disturbance, 2 weeks</span>
+      <span class="chip"><span class="sw" style="background:#7b2cbf"></span>Disturbance this year</span>
     </div>
     <div id="mapStatus" class="map-status">Loading…</div>
 
@@ -293,6 +303,18 @@
 
       <!-- FOREST CHANGE -->
       <div id="dtab-forest" class="dtab-body" hidden>
+        <div class="section">
+          <span class="micro-label">This year · disturbance alerts <span class="live-tag">live</span></span>
+          <div class="metric-grid" style="margin-top:12px">
+            <div class="metric"><div class="metric-num" id="aYtd">…</div><div class="metric-lbl" id="aYtdLbl">ha disturbed this year</div></div>
+            <div class="metric"><div class="metric-num" id="aWeek">…</div><div class="metric-lbl">ha in the last 7 days</div></div>
+            <div class="metric"><div class="metric-num" id="aWow">…</div><div class="metric-lbl">vs previous week</div></div>
+          </div>
+          <span class="micro-label">Weekly, since January <span id="aLatest" class="live-tag curated"></span></span>
+          <canvas id="alertWeeklyChart" height="130"></canvas>
+          <p class="layer-note" id="aNote">OPERA DIST-ALERT satellite detections, updated every 2 to 4 days. Includes fire scars, logging and dieback.</p>
+        </div>
+
         <div class="metric-grid">
           <div class="metric"><div class="metric-num" id="fLoss">…</div><div class="metric-lbl" id="fLossLbl">lost</div></div>
           <div class="metric"><div class="metric-num" id="fPct">…</div><div class="metric-lbl">of land area is forest</div></div>
@@ -344,6 +366,6 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="/static/app.js?v=11"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 </html>
